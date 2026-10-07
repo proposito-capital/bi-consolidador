@@ -2970,12 +2970,13 @@ function estrategiaFundo(w, dica = '') {
 }
 // Classifica um ativo de outra instituição na mesma lógica do BTG (Classe = Mercado, Subclasse, Estratégia)
 function classificar(nome, { categoria = '', indexador = '', dica = '' } = {}) {
-  const w = palavras(nome), c = palavras(categoria);
+  // Siglas emendadas no nome do fundo (ex.: "FICFIDC", "FICFIM", "FICFIA") viram palavras separadas
+  const w = palavras(nome).replace(/ fic(fidc|fim|fia|fip|firf) /g, ' fic $1 '), c = palavras(categoria);
   const estrIx = estrategiaIndexador(indexador);
   if (/ fii /.test(w) || / fundo imobiliario /.test(w)) return { classe: 'Renda Variável', sub: 'FII', estr: 'Alternativo' };
   if (/ (swap|termo|ndf|opcao|opcoes|derivativo|derivativos) /.test(w) || / (derivativos|opcoes) /.test(c)) return { classe: 'Derivativos', sub: 'Derivativos', estr: 'Derivativos' };
   if (/ (previdencia|pgbl|vgbl) /.test(w) || / previdencia /.test(c)) return { classe: 'Previdência', sub: 'PP', estr: estrategiaFundo(w, dica) };
-  if (/ fidc /.test(w)) return { classe: 'Fundos', sub: 'FN', estr: 'Alternativo' };
+  if (/ (fidc|fip) /.test(w)) return { classe: 'Fundos', sub: 'FN', estr: 'Alternativo' };
   if (/ (ntn|ntnb|ltn|lft|ntnf|tesouro) /.test(w)) {
     const tipo = / ltn /.test(w) ? 'LTN' : / lft /.test(w) ? 'LFT' : / (ntn f|ntnf) /.test(w) ? 'NTN-F' : 'NTN-B';
     return { classe: 'Renda Fixa', sub: 'TITULO PUBLICO', estr: estrIx || { LTN: 'Pré-fixado', 'NTN-F': 'Pré-fixado', LFT: 'Pós-fixado' }[tipo] || 'Inflação', tipo };
@@ -3035,6 +3036,13 @@ async function lerPdfLinhas(buffer) {
   return linhas;
 }
 function lerExtratoPdf(linhas, inst) {
+  // O PDF do BTG usa uma fonte em que a letra "a" vem como caractere vazio: devolve o "a" antes de ler
+  linhas = linhas.map(l => l.replace(/\u0000/g, 'a'));
+  const topo = palavras(linhas.slice(0, 60).join(' '));
+  // Reconhece pelo conteúdo (vale mesmo se a instituição escolhida no anexo estiver errada)
+  if (/ extrato da conta investimento /.test(topo) && linhas.some(l => /Posi\S+o - /i.test(l))) return lerBTGPdf(linhas);
+  if (/ informativo mensal /.test(topo) && / caixa /.test(topo)) return lerCaixaInformativo(linhas);
+  if (linhas.some(l => /^Investimentos\s+DT\.REF\s+DT\.VENCTO/i.test(l))) return lerCaixaSaldo(linhas);
   if (inst === 'Nomad' || linhas.some(l => /^Nome\s+Tipo\s+Ticker/i.test(l))) return lerNomad(linhas);
   if (inst === 'Safra') return lerSafra(linhas);
   if (inst === 'XP') return lerXP(linhas);
@@ -3042,6 +3050,139 @@ function lerExtratoPdf(linhas, inst) {
   if (/ safra /.test(t)) return lerSafra(linhas);
   if (/ (xp investimentos|posicao consolidada) /.test(t) || / xp /.test(palavras(linhas.join(' ')))) return lerXP(linhas);
   throw new Error('Ainda não sei ler PDFs desta instituição. Anexe como foto (o painel mostra a conferência), use o Excel padrão, ou mande um exemplo para o Claude incluir.');
+}
+
+/* ---------- BTG em PDF: "Extrato da Conta Investimento" (o mesmo do Excel, em PDF) ---------- */
+function lerBTGPdf(linhas) {
+  const txt = linhas.join('\n');
+  const conta = txt.match(/Conta investimento\s+(\d+)/i)?.[1] || null;
+  const iInv = linhas.findIndex(l => /^investimentos$/i.test(l.trim()));
+  const cliente = iInv >= 0 && /^[A-ZÀ-Ý][A-ZÀ-Ý .'&-]{5,}$/.test(linhas[iInv + 1] || '') ? linhas[iInv + 1].trim() : null;
+  const per = txt.match(/Per\S+odo de \d{2}\/\d{2}\/\d{2}\s+a\s+(\d{2})\/(\d{2})\/(\d{2})/i);
+  const data = per ? `${per[1]}/${per[2]}/20${per[3]}` : null;
+  const totLinha = linhas.find(l => /^Total\s+[\d.]+,\d{2}\s+[\d.]+,\d{2}\s+[\d.]+,\d{2}\s+[\d.]+,\d{2}$/.test(l));
+  const total = totLinha ? numero(totLinha.split(/\s+/)[3]) : null;
+  const regs = [], avisos = [];
+  const v = s => s === '-' ? 0 : numero(s);
+  const ano4 = d => d.replace(/^(\d{2})\/(\d{2})\/(\d{2})$/, '$1/$2/20$3');
+  const estrPorTaxa = s => { const n = norm(s); return /ipca|ipc|igp/.test(n) ? 'Inflação' : /cdi|selic/.test(n) ? 'Pós-fixado' : n ? 'Pré-fixado' : null; };
+  const tipoRF = b => { const n = norm(b); return /ntn|ltn|lft|tesouro|titulo/.test(n) ? 'TITULO PUBLICO' : /cdb|lca|lci|\blf\b|rdb|lig/.test(n) ? 'BANCARIO' : 'PRIVADO'; };
+  let secao = '', bloco = '', pre = [];
+  for (let i = 0; i < linhas.length; i++) {
+    const l = linhas[i].trim();
+    let m;
+    if (/^(Extrato da Conta Investimento|Per\S+odo de|<<PAGINA>>)/i.test(l)) continue;
+    if ((m = l.match(/^Fundo de Investimento - Posi\S+o/i))) { secao = 'fundos'; continue; }
+    // "Renda Fixa" vem quebrado pela fonte do PDF (ex.: "Renda axa"): reconhece qualquer "Renda <x> - Posição" que não seja variável
+    if ((m = l.match(/^Renda\s+(?!vari)\S+\s+-\s+Posi\S+o\s+-\s+(.+)$/i)) && !/Consolidad/i.test(l)) { secao = 'rf'; bloco = m[1].trim(); pre = []; continue; }
+    if ((m = l.match(/^Renda vari\S+vel - Posi\S+o - (.+)$/i))) { secao = 'rv'; bloco = m[1].trim(); continue; }
+    if (/^Conta corrente - Posi\S+o/i.test(l)) { secao = 'cc'; continue; }
+    if (/ - (Detalhamento|Movimenta\S+o|Posi\S+o Consolidada)/i.test(l) || /^Disclaimers|^Fale Conosco|^Perfil de Risco/i.test(l)) { secao = ''; continue; }
+    if (secao === 'fundos') {
+      if (/^Total em fundos/i.test(l)) { secao = ''; continue; }
+      if ((m = l.match(/^\d{2}\/\d{2}\/\d{2}\s+(.+)$/)) && /CNPJ/i.test(linhas[i - 1] || '')) {
+        const n = m[1].split(/\s+/);  // líquido anterior, cotas, cotação, bruto, IR, IOF, líquido, variação
+        const nome = linhas[i - 1].split(/\s+-\s+Classe\b|\s+-\s+CNPJ/i)[0].trim();
+        const cls = classificar(nome, { categoria: 'fundos' });
+        regs.push({ mercado: 'Fundos', sub: 'FN', produto: nome, ativo: nome, estrategia: cls.estr, quantidade: v(n[1]), bruto: v(n[3]), liquido: v(n[6]) });
+      }
+      continue;
+    }
+    if (secao === 'rf') {
+      // Linha de dados: [emissor] emissão vencimento liquidez - - taxa qtde preço bruto IR IOF líquido
+      if ((m = l.match(/^(.*?)\s*(\d{2}\/\d{2}\/\d{2})\s+(\d{2}\/\d{2}\/\d{2})\s+(Sim|N\S+o)\s+(\S+)\s+(\S+)\s+(.+?)\s+([\d.]+,\d+)\s+([\d.]+,\d+)\s+([\d.]+,\d{2})\s+(\S+)\s+(\S+)\s+([\d.]+,\d{2})$/i))) {
+        const pos = (linhas[i + 1] || '').trim().split(/\s+/);
+        const codigo = pos.pop() || '';
+        const preTok = pre.join(' ').trim().split(/\s+/).filter(Boolean);
+        const prefixo = /-$/.test(preTok.at(-1) || '') ? preTok.pop() : '';
+        const emissor = [...preTok, m[1], ...pos].join(' ').replace(/\s+/g, ' ').trim();
+        const sub = tipoRF(bloco);
+        regs.push({ mercado: 'Renda Fixa', sub, ativo: codigo || (prefixo + bloco), produto: bloco.toUpperCase(), emissor: emissor || (sub === 'TITULO PUBLICO' ? 'TESOURO NACIONAL' : ''),
+          vencimento: ano4(m[3]), estrategia: estrPorTaxa(m[7]), taxaTexto: m[7], quantidade: v(m[8]), bruto: v(m[10]), liquido: v(m[13]) });
+        pre = []; i++;  // a linha seguinte (código do ativo) já foi usada
+        continue;
+      }
+      if (/^[\d.]+,\d{2}(\s+(-|[\d.]+,\d{2})){3}$/.test(l)) { pre = []; continue; }  // total da seção
+      if (/^(Dias de|Emissor\s+Ativo|liquidez|par\S* liquidez|Ponderad)/i.test(l)) continue;
+      pre.push(l);
+      continue;
+    }
+    if (secao === 'rv') {
+      if (/^Total/i.test(l)) { secao = ''; continue; }
+      if ((m = l.match(/^([A-Z]{4}\d{1,2}[A-Z]?)\s+(.+?)\s+([\d.]+)\s+([\d.]+,\d{2})\s+([\d.]+,\d{2})\s+([\d.]+,\d{2})$/))) {
+        const fii = /fii|fiagro|infra/i.test(m[2]) || /fii|fiagro/i.test(bloco);
+        regs.push({ mercado: 'Renda Variável', sub: fii ? 'FII' : /bdr/i.test(bloco) ? 'BDR' : 'ACAO', ativo: m[1], produto: m[1], estrategia: fii ? 'Alternativo' : 'Renda Variável', quantidade: v(m[3]), bruto: v(m[6]), liquido: v(m[6]) });
+      }
+      continue;
+    }
+    if (secao === 'cc' && (m = l.match(/^\d{2}\/\d{2}\/\d{2}\s+(-?[\d.]+,\d{2})$/))) {
+      regs.push({ mercado: 'Conta Corrente', sub: 'CC', produto: 'Conta Corrente', bruto: v(m[1]), liquido: v(m[1]) });
+      secao = '';
+    }
+  }
+  if (!regs.length) throw new Error('Reconheci o extrato do BTG em PDF, mas não encontrei as posições. Use o Excel do extrato.');
+  return { inst: 'BTG', conta, clienteSugerido: cliente, data, total, regs, avisos, contaBTG: conta };
+}
+
+/* ---------- Caixa: "Informativo mensal LCI Caixa" (uma nota por aplicação) ---------- */
+function lerCaixaInformativo(linhas) {
+  const txt = linhas.join('\n');
+  const ct = txt.match(/(\d{4})\s*\.\s*(\d{4})\s*\.\s*(\d{6,})\s*-\s*(\d)\s+\d{5}\/\d{5}/);
+  const conta = ct ? `${ct[1]}.${ct[2]}.${ct[3]}-${ct[4]}` : null;
+  const nomeL = linhas.find(l => /^[A-ZÀ-Ý][A-ZÀ-Ý .'&-]{5,}\s+\d{3}\.\d{3}\.\d{3}-\d{2}$/.test(l.trim()));
+  const cliente = nomeL ? nomeL.trim().replace(/\s+\d{3}\.\d{3}\.\d{3}-\d{2}$/, '') : null;
+  const iPos = nomeL ? linhas.indexOf(nomeL) : -1;
+  const data = iPos >= 0 ? (linhas[iPos + 1] || '').match(/(\d{2}\/\d{2}\/\d{4})/)?.[1] || null : null;
+  const iTot = linhas.findIndex(l => /^[\d.]+,\d{2}(\s+[\d.]+,\d{2}){5}$/.test(l.trim()));
+  const total = iTot >= 0 ? numero(linhas[iTot].trim().split(/\s+/).pop()) : null;
+  const regs = [], vistos = new Set();
+  let nota = null;
+  for (let i = 0; i < linhas.length; i++) {
+    const l = linhas[i].trim();
+    let m;
+    if ((m = l.match(/^(\d{8})\s+(\d{6})\s+(.+?)\s+(antecipado|no vencimento|sim|n\S+o)\b/i)) && /Nota/i.test(linhas[i - 1] || '')) { nota = { num: m[1] + ' ' + m[2], modalidade: m[3].trim() }; continue; }
+    if (nota && (m = l.match(/^(\d{2}\/\d{2}\/\d{4})\s+(\d{2}\/\d{2}\/\d{4})\s+[\d.]+,\d{2}\s+([\d.,]+)\s*%\s*CDI/i))) { nota.venc = m[2]; nota.taxa = `${num(numero(m[3]), 2)}% do CDI`; continue; }
+    if (nota && /^%Rend/i.test(l) && /Saldo em/i.test(l)) {
+      const saldo = numero((linhas[i + 1] || '').trim().split(/\s+/).pop());
+      if (!vistos.has(nota.num) && saldo) {
+        vistos.add(nota.num);
+        const tipo = /lci/i.test(nota.modalidade) ? 'LCI' : /lca/i.test(nota.modalidade) ? 'LCA' : /cdb/i.test(nota.modalidade) ? 'CDB' : nota.modalidade;
+        regs.push({ mercado: 'Renda Fixa', sub: 'BANCARIO', ativo: tipo, produto: tipo, emissor: 'CAIXA ECONOMICA FEDERAL', vencimento: nota.venc || null,
+          estrategia: /cdi/i.test(nota.taxa || '') ? 'Pós-fixado' : 'Sem classificação', taxaTexto: nota.taxa || '', bruto: saldo, liquido: saldo });
+      }
+      nota = null;
+    }
+  }
+  if (!regs.length) throw new Error('Reconheci o informativo da Caixa, mas não encontrei as aplicações.');
+  return { inst: 'Caixa', conta, clienteSugerido: cliente, data, total, regs, avisos: ['Valores do informativo mensal da Caixa (saldo de cada nota na data da posição).'] };
+}
+
+/* ---------- Caixa: "Saldo em carteira" (resumo das aplicações e fundos) ---------- */
+function lerCaixaSaldo(linhas) {
+  const cliente = (linhas[0] || '').trim() || null;
+  const data = linhas.join('\n').match(/Data\s*-\s*(\d{2}\/\d{2}\/\d{4})/i)?.[1] || null;
+  const regs = [];
+  let total = 0, secao = '';
+  for (const bruta of linhas) {
+    const l = bruta.trim();
+    let m;
+    if (/^Investimentos\s+DT\.REF/i.test(l)) { secao = 'rf'; continue; }
+    if (/^Investimentos\s+Convers/i.test(l)) { secao = 'fundos'; continue; }
+    if ((m = l.match(/^R\$\s*([\d.]+,\d{2})$/))) { total += numero(m[1]); continue; }  // total de cada bloco
+    if (secao === 'rf' && (m = l.match(/^(.+?)\s+(\d{2}\/\d{2}\/\d{4})\s+(\d{2}\/\d{2}\/\d{4})\s+([\d.,]+)\s+R\$\s*([\d.]+,\d{2})$/))) {
+      const mod = m[1].trim(), tipo = /lci/i.test(mod) ? 'LCI' : /lca/i.test(mod) ? 'LCA' : /cdb/i.test(mod) ? 'CDB' : mod;
+      regs.push({ mercado: 'Renda Fixa', sub: 'BANCARIO', ativo: tipo, produto: tipo, emissor: 'CAIXA ECONOMICA FEDERAL', vencimento: m[3],
+        estrategia: 'Pós-fixado', taxaTexto: `${num(numero(m[4]), 2)}% do CDI`, bruto: numero(m[5]), liquido: numero(m[5]) });
+      continue;
+    }
+    if (secao === 'fundos' && (m = l.match(/^(.+?)\s+(imediato|D\s*\+\s*\d+)\s+R\$\s*([\d.]+,\d{2})$/i))) {
+      const nome = `CAIXA ${m[1].trim()}`, cls = classificar(nome + ' FI', { categoria: 'fundos' });
+      regs.push({ mercado: 'Fundos', sub: 'FN', produto: nome, ativo: nome, estrategia: cls.estr, bruto: numero(m[3]), liquido: numero(m[3]) });
+    }
+  }
+  if (!regs.length) throw new Error('Reconheci o saldo em carteira da Caixa, mas não encontrei as aplicações.');
+  return { inst: 'Caixa', conta: '', clienteSugerido: cliente, data, total: total || null, regs,
+    avisos: ['O "Saldo em carteira" da Caixa não traz o número da conta: use o mesmo da Caixa já carregada deste cliente, para um extrato substituir o outro (o informativo mensal e o saldo em carteira mostram as mesmas aplicações).'] };
 }
 
 /* ---------- Safra: "Relatório Diário" ---------- */
@@ -3274,6 +3415,11 @@ function reconciliar(ext) {
    Quem mudar o código acrescenta uma entrada no topo (data, autor e o que mudou, em linguagem simples).
    Ao abrir uma versão nova, o B.I. registra a atualização no histórico. */
 const VERSOES_BI = [
+  { versao: '2026.10.07b', data: '2026-10-07', autor: 'Vinicius + Claude', mudancas: [
+    'Novos leitores de PDF: extrato da conta do BTG em PDF, informativo mensal de LCI da Caixa e saldo em carteira da Caixa.',
+    'O banco do PDF é reconhecido pelo conteúdo, mesmo que a instituição escolhida no anexo esteja errada.',
+    'Extrato sem número de conta sugere a conta da mesma instituição já carregada para o cliente (um extrato substitui o outro).',
+  ] },
   { versao: '2026.10.07', data: '2026-10-07', autor: 'Vinicius + Claude', mudancas: [
     'O B.I. pode ser aberto por um link (site): o código fica no link e os dados continuam só no computador de cada pessoa.',
     'O cadastro de clientes (grupos.js) passa a ser lido da pasta de extratos no "Ler pasta" e fica guardado no navegador.',
@@ -3604,7 +3750,7 @@ function recalcular() {
   const { clientes, familias, porConta } = montarClientes(posicoes, exemplo);
   Object.assign(S, { clientes, familias, clientePorConta: porConta });
   const insts = [...new Set(posicoes.map(p => p.instituicao))];
-  $('#fonte').textContent = `${insts.join(' + ')} · ${inteiro(S.clientes.size)} clientes`;
+  $('#fonte').textContent = `${insts.join(' + ')} · ${inteiro(S.clientes.size)} ${S.clientes.size === 1 ? 'cliente' : 'clientes'}`;
   $('#erro').hidden = true;
   $('#vazio').hidden = true;
   $('#painel').hidden = false;
@@ -3885,16 +4031,17 @@ async function buscarPtax() {
 }
 
 /* ---------- Passo 1: escolher instituição, tipo e arquivo ---------- */
-const INSTITUICOES = [['BTG', 'BTG Pactual'], ['XP', 'XP Investimentos'], ['Safra', 'Safra'], ['Nomad', 'Nomad'], ['Rhino', 'Rhino Securitizadora']];
+const INSTITUICOES = [['BTG', 'BTG Pactual'], ['XP', 'XP Investimentos'], ['Safra', 'Safra'], ['Caixa', 'Caixa Econômica'], ['Nomad', 'Nomad'], ['Rhino', 'Rhino Securitizadora']];
 function dicaAnexo(inst, tipo) {
   if (tipo === 'foto') return 'Print ou foto legível do aplicativo ou do extrato. O painel lê o texto (no próprio navegador) e mostra uma tabela para você conferir antes de adicionar.';
   if (inst === 'BTG' && tipo === 'excel') return 'Pode ser a posição da base inteira (relatório "Posição") ou o extrato de um cliente ("Extrato da Conta Investimento"). O painel reconhece sozinho.';
-  if (inst === 'BTG' && tipo === 'pdf') return 'Para o BTG, use o Excel (posição da base ou extrato do cliente): é mais completo que o PDF.';
+  if (inst === 'BTG' && tipo === 'pdf') return 'Extrato da Conta Investimento em PDF. O Excel do mesmo extrato também funciona.';
+  if (inst === 'Caixa' && tipo === 'pdf') return 'Informativo mensal de LCI ou "Saldo em carteira" da Caixa (os dois mostram as mesmas aplicações: use um deles).';
   if (inst === 'XP' && tipo === 'pdf') return 'Relatório "Posição Consolidada" da XP.';
   if (inst === 'Safra' && tipo === 'pdf') return 'Relatório Diário do Safra (posição de investimentos).';
   if (inst === 'Nomad') return 'Lista de posições em dólar. O painel converte para reais pelo câmbio (PTAX), que você pode ajustar.';
   if (tipo === 'excel') return 'Excel no formato padrão do painel. <button type="button" class="btn-link" data-acao="modelo">Baixar o modelo</button>';
-  return 'PDFs reconhecidos: XP, Safra e Nomad. Para outra instituição, use foto (com conferência) ou o Excel padrão.';
+  return 'PDFs reconhecidos: BTG, XP, Safra, Caixa e Nomad. Para outra instituição, use foto (com conferência) ou o Excel padrão.';
 }
 function escolherAnexo(padrao = {}) {
   return new Promise(resolve => {
@@ -3961,6 +4108,11 @@ function perguntarDono(ext) {
     const clientes = [...S.clientes.values()].sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
     const familias = nomesFamilias();
     const contaCad = c => ext.inst === 'BTG' ? c : `${ext.inst} ${c}`.trim();
+    if (!ext.conta && ext.clienteSugerido) {
+      const k = norm(ext.clienteSugerido);
+      const igual = [...S.fontes.values()].find(f => f.inst === ext.inst && f.registros.some(r => norm(r.nome) === k));
+      if (igual) ext.conta = String(igual.registros[0].conta).replace(new RegExp('^' + ext.inst + '\\s+'), '');
+    }
     const cad = ext.inst && ext.conta ? cadastroDe(contaCad(ext.conta)) : null;
     let sugerido = null;
     if (cad) sugerido = S.clientes.get('p:' + norm(cad.cliente)) || null;
@@ -4219,7 +4371,7 @@ async function lerCadastroDaPasta(arquivo) {
   limparCadLocal();
   return cad;
 }
-const INST_NOME_ARQ = [[/\bbtg\b/i, 'BTG'], [/\bxp\b/i, 'XP'], [/safra/i, 'Safra'], [/nomad/i, 'Nomad'], [/rhino/i, 'Rhino'], [/ita[uú]/i, 'Itaú'], [/bradesco/i, 'Bradesco'], [/santander/i, 'Santander']];
+const INST_NOME_ARQ = [[/\bbtg\b/i, 'BTG'], [/\bxp\b/i, 'XP'], [/safra/i, 'Safra'], [/nomad/i, 'Nomad'], [/rhino/i, 'Rhino'], [/caixa|\blci\b/i, 'Caixa'], [/ita[uú]/i, 'Itaú'], [/bradesco/i, 'Bradesco'], [/santander/i, 'Santander']];
 function planoPasta(arquivos) {
   const cadastros = arquivos.filter(f => /^grupos\.js$/i.test(f.name)).sort((a, b) => b.lastModified - a.lastModified);
   const tipoDe = n => /\.pdf$/i.test(n) ? 'pdf' : /\.(xlsx|xls|xlsm)$/i.test(n) ? 'excel' : /\.(png|jpe?g|webp|bmp)$/i.test(n) ? 'foto' : null;
