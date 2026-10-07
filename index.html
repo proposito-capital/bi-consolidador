@@ -820,7 +820,7 @@ const COLUNAS = {
 const OBRIGATORIAS = ['conta', 'nome', 'mercado', 'sub mercado', 'valor bruto'];
 
 // Mercados que vêm sem "Estratégia" no export
-const ESTRATEGIA_PADRAO = { 'conta corrente': 'Caixa', 'valor em transito': 'Valor em Trânsito', 'criptoativos': 'Cripto', 'derivativos': 'Derivativos', 'internacional': 'Internacional' };
+const ESTRATEGIA_PADRAO = { 'conta corrente': 'Caixa', 'valor em transito': 'Valores a receber', 'valores a receber': 'Valores a receber', 'criptoativos': 'Cripto', 'derivativos': 'Derivativos', 'internacional': 'Internacional' };
 
 function lerPlanilha(buffer) {
   const wb = XLSX.read(buffer, { type: 'array' });
@@ -892,8 +892,11 @@ function montarPosicao(r) {
   };
   p.estrategia = texto(r.estrategia) || ESTRATEGIA_PADRAO[norm(mercado)] || 'Sem classificação';
   p.caixa = norm(mercado) === 'conta corrente';
-  // Fora da alocação (informados em separado): valores em trânsito e derivativos
-  p.transito = ['valor em transito', 'derivativos'].includes(norm(mercado));
+  // Valores futuros (proventos, amortizações e liquidações a receber): entram no patrimônio como "Valores a receber"
+  p.receber = ['valor em transito', 'valores em transito', 'valores a receber', 'proventos a receber'].includes(norm(mercado));
+  if (p.receber) { p.classe = 'Valores a receber'; p.subclasse = 'VR'; p.estrategia = 'Valores a receber'; }
+  // Fora da alocação (informados em separado): derivativos
+  p.transito = norm(mercado) === 'derivativos';
   p.nomeAtivo = nomeDoAtivo(p);
   return p;
 }
@@ -1006,7 +1009,7 @@ function contasResumo() {
   return m;
 }
 const rotuloConta = c => `${c.conta} · ${c.nome}`;
-const investimentos = () => S.posicoes.filter(p => !p.caixa && !p.transito);
+const investimentos = () => S.posicoes.filter(p => !p.caixa && !p.transito && !p.receber);
 
 /* ---------- Clientes e famílias (cadastro local em grupos.js ou coluna "Grupo" da planilha) ---------- */
 const chaveConta = c => String(c ?? '').trim().replace(/^0+/, '');
@@ -1728,7 +1731,7 @@ function dgEnriquecer(p, base) {
 
   // Classe estratégica (o risco de fato, não o rótulo do custodiante)
   let classe;
-  if (p.caixa || (p.transito && !deriv)) classe = 'Caixa';
+  if (p.caixa || p.receber || (p.transito && !deriv)) classe = 'Caixa';
   else if (deriv) classe = tem(/ pre /) ? 'Pre' : tem(/ (ipca|ipc) /) ? 'Infl' : 'Pos';
   else if (exterior) classe = 'Intl';
   else if (dp.classe) classe = dp.classe;
@@ -1766,7 +1769,7 @@ function dgEnriquecer(p, base) {
   let ge, papel;
   if (direto) {
     if (ehTP) { ge = 'Tesouro Nacional'; papel = `Soberano — ${p.produto || 'título público'}`; }
-    else if (classe === 'Caixa') { ge = p.instituicao === 'BTG' ? 'BTG Pactual' : p.instituicao; papel = p.transito ? 'Valor em trânsito' : 'Bancário — conta corrente'; }
+    else if (classe === 'Caixa') { ge = p.instituicao === 'BTG' ? 'BTG Pactual' : p.instituicao; papel = p.receber ? 'Valores a receber' : p.transito ? 'Valor em trânsito' : 'Bancário — conta corrente'; }
     else if (deriv) { ge = p.instituicao === 'BTG' ? 'BTG Pactual' : p.instituicao; papel = 'Derivativo — contraparte da operação'; }
     else if (acaoDireta) { ge = ticker; papel = 'Ação listada'; }
     else if (exteriorDireto) { ge = p.produto || p.ativo; papel = `Exterior — ${p.subclasse}`; }
@@ -1781,7 +1784,7 @@ function dgEnriquecer(p, base) {
   } else {
     ge = dp.gestor || GESTORAS.find(([re]) => re.test(up))?.[1] || 'Gestora não identificada';
   }
-  const fgc = (ehBanc && !tem(/ (lf|lig) /)) || (classe === 'Caixa' && !p.transito);
+  const fgc = (ehBanc && !tem(/ (lf|lig) /)) || (classe === 'Caixa' && !p.transito && !p.receber);
 
   // Horizonte de prazo (C/M/L) e janela de liquidez
   const anos = p.vencimento instanceof Date ? (p.vencimento - base) / 3.15576e10 : null;
@@ -1817,11 +1820,11 @@ function dgEnriquecer(p, base) {
   if (!dp.nome && (ehPriv || ehBanc) && !deriv) nome = `${papel.split('— ').pop()} ${ge}${p.vencimento ? ' – ' + mesAno(p.vencimento) : p.ativo && p.ativo !== p.produto ? ' — ' + p.ativo : ''}`;
   if (exterior) nome = p.ativo && p.produto && p.ativo !== p.produto ? `${p.ativo} — ${p.produto}` : (p.produto || p.ativo);
   if (!dp.nome && ehTP) nome = `${p.produto || 'Título público'} Tesouro Nacional${p.vencimento ? ' ' + p.vencimento.getFullYear() : ''}`;
-  if (classe === 'Caixa') nome = p.transito ? `Valor em trânsito — ${p.nomeAtivo}` : 'Saldo em conta corrente';
+  if (classe === 'Caixa') nome = p.receber ? `A receber — ${p.nomeAtivo}` : p.transito ? `Valor em trânsito — ${p.nomeAtivo}` : 'Saldo em conta corrente';
   const tx = p.taxaCompra || p.taxaEmissao;
   let carac;
   if (dp.carac) carac = dp.carac;
-  else if (classe === 'Caixa') carac = p.transito ? 'Valor em trânsito' : 'Disponibilidade imediata';
+  else if (classe === 'Caixa') carac = p.receber ? `Valor futuro${p.vencimento ? ' • ' + dataBR(p.vencimento) : ''}` : p.transito ? 'Valor em trânsito' : 'Disponibilidade imediata';
   else if (deriv) carac = 'Derivativo — marcação a mercado';
   else if (direto && (ehTP || ehBanc || ehPriv || m === 'coe')) {
     const idx = p.taxaTexto ? p.taxaTexto : classe === 'Pos' ? (tx ? (tx > 20 ? `${num(tx)}% do CDI` : `CDI + ${num(tx)}%`) : 'CDI')
@@ -1839,7 +1842,7 @@ function dgEnriquecer(p, base) {
   else carac = p.estrategia || '—';
 
   // Veículo (como o dinheiro está aplicado), para abrir cada classe: fundo, título público, CDB, crédito privado…
-  const veiculo = classe === 'Caixa' ? 'Conta corrente' : m === 'previdencia' ? 'Previdência' : deriv ? 'Derivativos' : ehTP ? 'Título público'
+  const veiculo = p.receber ? 'Valores a receber' : classe === 'Caixa' ? 'Conta corrente' : m === 'previdencia' ? 'Previdência' : deriv ? 'Derivativos' : ehTP ? 'Título público'
     : ehBanc ? 'Renda fixa bancária' : ehPriv ? 'Crédito privado (CRI, CRA, debênture)' : m === 'coe' ? 'COE' : ehFIP ? 'FIP' : ehFIDC ? 'FIDC'
     : ehFII ? 'FII / Fiagro' : acaoDireta ? 'Ações' : exteriorDireto ? 'Ativos no exterior' : exterior ? 'Fundos e ETFs no exterior'
     : m === 'criptoativos' ? 'Criptoativos' : ehLista ? 'ETF' : ehFundo ? 'Fundos' : 'Outros';
@@ -2248,6 +2251,15 @@ function renderDiag(s, P) {
     const legH = hs.filter(h => h.v > 0).map(h => `<span><i class="sw" style="background:${corH[h.k]}"></i>${HORIZONTES[h.k][0]}</span>`).join('');
     let corpo = `<div class="dg-classe dg-hz"><div class="dg-rosca">${roscaH}<div class="leg-hz">${legH}</div></div><div><div class="box-k">Resumo por horizonte</div>${resumo}</div></div>`;
     if (curtoMedio) corpo += `<div class="dg-2col bloco-dg">${curtoMedio}</div>`;
+    // Valores futuros a receber (proventos, amortizações, liquidações), quando houver
+    const aReceber = L.filter(x => x.p.receber).sort((a, b) => (a.p.vencimento || 0) - (b.p.vencimento || 0));
+    if (aReceber.length) {
+      const vR = aReceber.reduce((a, x) => a + x.v, 0);
+      corpo += `<div class="box-k bloco-dg">Valores futuros a receber <span class="bk-x">${rsDG(vR)} • ${pcT(vR)} da carteira</span></div>` + tabelaDG([
+        { rot: 'Descrição', w: '46%', l: 1, f: x => `<span class="nm">${esc(x.p.nomeAtivo)}</span>` }, ...colTI,
+        { rot: 'Previsão', w: '14%', f: x => x.p.vencimento ? dataBR(x.p.vencimento) : '—' }, { rot: 'Valor (R$)', w: '18%', f: x => rsDG(x.v) }, { rot: '% cart.', w: '10%', f: x => pcT(x.v) },
+      ], aReceber, ['TOTAL A RECEBER', ...colTI.map(() => ''), '', rsDG(vR), pcT(vR)]);
+    }
     corpo += `<div class="box-k bloco-dg">Classe estratégica por horizonte de prazo <span class="bk-x">% dentro de cada classe</span></div>${matriz}${obsDG(textos)}`;
     // Longo prazo: ativo a ativo; com muitos ativos, ganha uma seção (página) própria
     const longoSeparado = hs[2].itens.length > 8;
@@ -3067,7 +3079,9 @@ function lerBTGPdf(linhas) {
   const ano4 = d => d.replace(/^(\d{2})\/(\d{2})\/(\d{2})$/, '$1/$2/20$3');
   const estrPorTaxa = s => { const n = norm(s); return /ipca|ipc|igp/.test(n) ? 'Inflação' : /cdi|selic/.test(n) ? 'Pós-fixado' : n ? 'Pré-fixado' : null; };
   const tipoRF = b => { const n = norm(b); return /ntn|ltn|lft|tesouro|titulo/.test(n) ? 'TITULO PUBLICO' : /cdb|lca|lci|\blf\b|rdb|lig/.test(n) ? 'BANCARIO' : 'PRIVADO'; };
-  let secao = '', bloco = '', pre = [];
+  // Mesmo "produto" que o leitor do Excel usa (ex.: "DEBENTURE", "CDB", "LTN")
+  const produtoRF = b => /deb/i.test(norm(b)) ? 'DEBENTURE' : tipoRF(b) === 'TITULO PUBLICO' ? b.replace(/^NTN-?B$/i, 'NTN-B').replace(/^NTN-?F$/i, 'NTN-F') : b.toUpperCase();
+  let secao = '', bloco = '', pre = [], emissorCoe = '', plano = '';
   for (let i = 0; i < linhas.length; i++) {
     const l = linhas[i].trim();
     let m;
@@ -3077,6 +3091,9 @@ function lerBTGPdf(linhas) {
     if ((m = l.match(/^Renda\s+(?!vari)\S+\s+-\s+Posi\S+o\s+-\s+(.+)$/i)) && !/Consolidad/i.test(l)) { secao = 'rf'; bloco = m[1].trim(); pre = []; continue; }
     if ((m = l.match(/^Renda vari\S+vel - Posi\S+o - (.+)$/i))) { secao = 'rv'; bloco = m[1].trim(); continue; }
     if (/^Conta corrente - Posi\S+o/i.test(l)) { secao = 'cc'; continue; }
+    if ((m = l.match(/^COE - Posi\S+o(?: - (.+))?$/i))) { secao = 'coe'; emissorCoe = (m[1] || '').trim(); continue; }
+    if ((m = l.match(/^Previd\S+ncia Individual - Posi\S+o(?: - (.+))?$/i))) { secao = 'prev'; plano = (m[1] || '').match(/VGBL|PGBL/i)?.[0]?.toUpperCase() || ''; continue; }
+    if (/^Valores em tr\S+nsito/i.test(l)) { secao = 'transito'; continue; }
     if (/ - (Detalhamento|Movimenta\S+o|Posi\S+o Consolidada)/i.test(l) || /^Disclaimers|^Fale Conosco|^Perfil de Risco/i.test(l)) { secao = ''; continue; }
     if (secao === 'fundos') {
       if (/^Total em fundos/i.test(l)) { secao = ''; continue; }
@@ -3084,20 +3101,27 @@ function lerBTGPdf(linhas) {
         const n = m[1].split(/\s+/);  // líquido anterior, cotas, cotação, bruto, IR, IOF, líquido, variação
         const nome = linhas[i - 1].split(/\s+-\s+Classe\b|\s+-\s+CNPJ/i)[0].trim();
         const cls = classificar(nome, { categoria: 'fundos' });
-        regs.push({ mercado: 'Fundos', sub: 'FN', produto: nome, ativo: nome, estrategia: cls.estr, quantidade: v(n[1]), bruto: v(n[3]), liquido: v(n[6]) });
+        regs.push({ mercado: 'Fundos', sub: 'FN', produto: nome, estrategia: cls.estr, quantidade: v(n[1]), bruto: v(n[3]), liquido: v(n[6]) });
       }
       continue;
     }
     if (secao === 'rf') {
       // Linha de dados: [emissor] emissão vencimento liquidez - - taxa qtde preço bruto IR IOF líquido
       if ((m = l.match(/^(.*?)\s*(\d{2}\/\d{2}\/\d{2})\s+(\d{2}\/\d{2}\/\d{2})\s+(Sim|N\S+o)\s+(\S+)\s+(\S+)\s+(.+?)\s+([\d.]+,\d+)\s+([\d.]+,\d+)\s+([\d.]+,\d{2})\s+(\S+)\s+(\S+)\s+([\d.]+,\d{2})$/i))) {
-        const pos = (linhas[i + 1] || '').trim().split(/\s+/);
-        const codigo = pos.pop() || '';
+        const pos = (linhas[i + 1] || '').trim().split(/\s+/).filter(Boolean);
         const preTok = pre.join(' ').trim().split(/\s+/).filter(Boolean);
         const prefixo = /-$/.test(preTok.at(-1) || '') ? preTok.pop() : '';
-        const emissor = [...preTok, m[1], ...pos].join(' ').replace(/\s+/g, ' ').trim();
+        let ativo, emissor;
+        if (prefixo) {               // ex.: "BTG CRA-" / dados / "COMMODITIES CRA02300TSB" → CRA-CRA02300TSB, emissor BTG COMMODITIES
+          ativo = prefixo + (pos.pop() || '');
+          emissor = [...preTok, m[1], ...pos].join(' ');
+        } else {                     // título público: "LTN 10/01/25 …", emissor nas linhas de cima e de baixo
+          ativo = m[1] || produtoRF(bloco);
+          emissor = [...preTok, ...pos].join(' ');
+        }
+        emissor = emissor.replace(/\s+/g, ' ').trim();
         const sub = tipoRF(bloco);
-        regs.push({ mercado: 'Renda Fixa', sub, ativo: codigo || (prefixo + bloco), produto: bloco.toUpperCase(), emissor: emissor || (sub === 'TITULO PUBLICO' ? 'TESOURO NACIONAL' : ''),
+        regs.push({ mercado: 'Renda Fixa', sub, ativo, produto: produtoRF(bloco), emissor: emissor || (sub === 'TITULO PUBLICO' ? 'TESOURO NACIONAL' : ''),
           vencimento: ano4(m[3]), estrategia: estrPorTaxa(m[7]), taxaTexto: m[7], quantidade: v(m[8]), bruto: v(m[10]), liquido: v(m[13]) });
         pre = []; i++;  // a linha seguinte (código do ativo) já foi usada
         continue;
@@ -3109,9 +3133,33 @@ function lerBTGPdf(linhas) {
     }
     if (secao === 'rv') {
       if (/^Total/i.test(l)) { secao = ''; continue; }
-      if ((m = l.match(/^([A-Z]{4}\d{1,2}[A-Z]?)\s+(.+?)\s+([\d.]+)\s+([\d.]+,\d{2})\s+([\d.]+,\d{2})\s+([\d.]+,\d{2})$/))) {
+      if ((m = l.match(/^([A-Z0-9]{4}\d{1,2}[A-Z]?)\s+(.+?)\s+([\d.]+)\s+([\d.]+,\d{2})\s+([\d.]+,\d{2})\s+([\d.]+,\d{2})$/))) {
         const fii = /fii|fiagro|infra/i.test(m[2]) || /fii|fiagro/i.test(bloco);
         regs.push({ mercado: 'Renda Variável', sub: fii ? 'FII' : /bdr/i.test(bloco) ? 'BDR' : 'ACAO', ativo: m[1], produto: m[1], estrategia: fii ? 'Alternativo' : 'Renda Variável', quantidade: v(m[3]), bruto: v(m[6]), liquido: v(m[6]) });
+      }
+      continue;
+    }
+    if (secao === 'coe') {
+      // código, emissão, vencimento, Cetip, aquisição, qtde, preço custo, valor custo, preço, bruto, IR, IOF, líquido
+      if ((m = l.match(/^(\S+)\s+\d{2}\/\d{2}\/\d{2}\s+(\d{2}\/\d{2}\/\d{2})\s+\S+\s+\d{2}\/\d{2}\/\d{2}\s+([\d.]+,\d+)\s+[\d.]+,\d+\s+[\d.]+,\d{2}\s+[\d.]+,\d+\s+([\d.]+,\d{2})\s+(\S+)\s+(\S+)\s+([\d.]+,\d{2})$/))) {
+        const cls = classificar(m[1], { categoria: 'COE' });
+        regs.push({ mercado: 'COE', sub: 'COE', ativo: m[1], produto: m[1], emissor: emissorCoe, vencimento: ano4(m[2]), estrategia: cls.estr, quantidade: v(m[3]), bruto: v(m[4]), liquido: v(m[7]) });
+      } else if (/^[\d.]+,\d{2}(\s+(-|[\d.]+,\d{2})){3}$/.test(l)) secao = '';
+      continue;
+    }
+    if (secao === 'prev') {
+      if (/^Total/i.test(l)) { secao = ''; continue; }
+      // fundo, CNPJ, data, cotas, cotação, saldo bruto
+      if ((m = l.match(/^(.+?)\s+\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}\s+\d{2}\/\d{2}\/\d{2}\s+([\d.]+,\d+)\s+[\d.]+,\d+\s+([\d.]+,\d{2})$/))) {
+        const cls = classificar(m[1], { categoria: 'Previdência' });
+        regs.push({ mercado: 'Previdência', sub: 'PP', ativo: m[1], produto: m[1], estrategia: cls.estr, tipoPlano: plano || null, quantidade: v(m[2]), bruto: v(m[3]), liquido: v(m[3]) });
+      }
+      continue;
+    }
+    if (secao === 'transito') {
+      if (/^Total/i.test(l)) { secao = ''; continue; }
+      if ((m = l.match(/^(\d{2}\/\d{2}\/\d{2})\s+(.+?)\s+(-?[\d.]+,\d{2})$/))) {
+        regs.push({ mercado: 'Valores a receber', sub: 'VR', produto: m[2].replace(/\s+/g, ' '), vencimento: ano4(m[1]), bruto: v(m[3]), liquido: v(m[3]) });
       }
       continue;
     }
@@ -3154,7 +3202,7 @@ function lerCaixaInformativo(linhas) {
     }
   }
   if (!regs.length) throw new Error('Reconheci o informativo da Caixa, mas não encontrei as aplicações.');
-  return { inst: 'Caixa', conta, clienteSugerido: cliente, data, total, regs, avisos: ['Valores do informativo mensal da Caixa (saldo de cada nota na data da posição).'] };
+  return { inst: 'Caixa', modelo: 'caixa-informativo', conta, clienteSugerido: cliente, data, total, regs, avisos: ['Valores do informativo mensal da Caixa (saldo de cada nota na data da posição).'] };
 }
 
 /* ---------- Caixa: "Saldo em carteira" (resumo das aplicações e fundos) ---------- */
@@ -3181,8 +3229,8 @@ function lerCaixaSaldo(linhas) {
     }
   }
   if (!regs.length) throw new Error('Reconheci o saldo em carteira da Caixa, mas não encontrei as aplicações.');
-  return { inst: 'Caixa', conta: '', clienteSugerido: cliente, data, total: total || null, regs,
-    avisos: ['O "Saldo em carteira" da Caixa não traz o número da conta: use o mesmo da Caixa já carregada deste cliente, para um extrato substituir o outro (o informativo mensal e o saldo em carteira mostram as mesmas aplicações).'] };
+  return { inst: 'Caixa', modelo: 'caixa-saldo', conta: '', clienteSugerido: cliente, data, total: total || null, regs,
+    avisos: ['O "Saldo em carteira" da Caixa não traz o número da conta. Se este cliente já tem o informativo mensal da Caixa, os dois são combinados: cada aplicação é contada uma vez, com o valor mais recente.'] };
 }
 
 /* ---------- Safra: "Relatório Diário" ---------- */
@@ -3358,7 +3406,7 @@ function lerXP(linhas) {
     r.emissor = sem.replace(/^(CDB|LCA|LCI|LC|LF|LIG|RDB|CRA|CRI|DEB(ENTURE)?|NTN-?\w*)\s+/i, '').replace(/\s*-\s*\d.*$/, '').trim() || null;
     if (/^NTN|^LTN|^LFT/i.test(r.ativo)) { r.sub = 'TITULO PUBLICO'; r.emissor = 'BACEN'; r.produto = sem.split(' - ')[0].replace(/\s+/g, ' '); }
   }
-  if (proventos > 0) regs.push({ mercado: 'Conta Corrente', sub: 'CC', produto: 'Proventos a receber', bruto: Math.round(proventos * 100) / 100, liquido: Math.round(proventos * 100) / 100 });
+  if (proventos > 0) regs.push({ mercado: 'Valores a receber', sub: 'VR', produto: 'Proventos a receber', bruto: Math.round(proventos * 100) / 100, liquido: Math.round(proventos * 100) / 100 });
   const saldo = txt.match(/SALDO DISPON\S*VEL\s+R\$\s*([\d.]+,\d{2})/i);
   if (saldo) regs.push({ mercado: 'Conta Corrente', sub: 'CC', produto: 'Conta Corrente', bruto: numBR(saldo[1]), liquido: numBR(saldo[1]) });
   return { inst: 'XP', conta: cli?.[2] || '', clienteSugerido: cli?.[1]?.trim() || null, data, total, regs, avisos };
@@ -3415,6 +3463,11 @@ function reconciliar(ext) {
    Quem mudar o código acrescenta uma entrada no topo (data, autor e o que mudou, em linguagem simples).
    Ao abrir uma versão nova, o B.I. registra a atualização no histórico. */
 const VERSOES_BI = [
+  { versao: '2026.10.07c', data: '2026-10-07', autor: 'Vinicius + Claude', mudancas: [
+    'Extrato do BTG em PDF agora lê também COE, previdência, ETF e valores em trânsito, e sai igual ao Excel do mesmo extrato.',
+    'Extratos da mesma instituição com as mesmas aplicações (ex.: informativo e saldo em carteira da Caixa) se combinam: nunca são somados duas vezes.',
+    'Novas classes "Saldo em conta" e "Valores a receber" (proventos, amortizações, liquidações futuras); os valores a receber entram no patrimônio e aparecem no horizonte de prazo.',
+  ] },
   { versao: '2026.10.07b', data: '2026-10-07', autor: 'Vinicius + Claude', mudancas: [
     'Novos leitores de PDF: extrato da conta do BTG em PDF, informativo mensal de LCI da Caixa e saldo em carteira da Caixa.',
     'O banco do PDF é reconhecido pelo conteúdo, mesmo que a instituição escolhida no anexo esteja errada.',
@@ -3719,6 +3772,7 @@ function adicionarFonte(f) {
   f.total = f.registros.reduce((a, r) => a + (numero(r.bruto) || 0), 0);
   if (f.id !== 'EXEMPLO') {
     f.enviadoEm = new Date().toISOString(); f.enviadoPor = usuario();
+    if (f.combinado) { delete f.combinado; S.fontes.set(f.id, f); salvarFontes(); recalcular(); return; }  // já registrado como "Extratos combinados" 
     const antes = S.fontes.get(f.id);
     const desc = f.id === 'BTG' ? `${f.arquivo || ''} · ${f.rotulo}${f.dataRef ? ` · posição de ${f.dataRef}` : ''}` : `${f.inst} · ${f.rotulo} · ${brl(f.total)}${f.dataRef ? ` · referência ${f.dataRef}` : ''} · ${f.arquivo || ''}`;
     registrar(f.id === 'BTG' ? 'Planilha do BTG carregada' : antes ? 'Extrato substituído' : 'Extrato incluído',
@@ -3919,7 +3973,7 @@ function lerExtratoBTG(wb) {
       } else if (na === 'conta corrente') {
         regs.push({ mercado: 'Conta Corrente', sub: 'CC', produto: 'Conta Corrente', bruto, liquido: bruto });
       } else if (na === 'valores em transito') {
-        regs.push({ mercado: 'Valor em Trânsito', sub: 'FN', produto: texto(v('descricao')) || 'Valor em trânsito', bruto, liquido: bruto });
+        regs.push({ mercado: 'Valores a receber', sub: 'VR', produto: texto(v('descricao')) || 'Valor a receber', vencimento: v('data liquidacao') ?? v('data'), bruto, liquido: bruto });
       } else if (/^previdencia/.test(na) && v('fundo')) {
         // "Previdência Individual": um bloco por plano ("Posição > 25617/VGBL"), com o fundo do plano
         const fundoPrev = texto(v('fundo')), cls = classificar(fundoPrev, { categoria: 'Previdência' });
@@ -4098,9 +4152,9 @@ async function anexarExtrato(padrao = {}) {
 }
 
 /* ---------- Passo 2: conferência das posições e dono do extrato ---------- */
-const MERCADOS_OPC = ['Renda Fixa', 'Fundos', 'Previdência', 'Renda Variável', 'Internacional', 'COE', 'Criptoativos', 'Conta Corrente', 'Valor em Trânsito', 'Derivativos', 'Outros'];
-const ESTRATEGIAS_OPC = ['Pós-fixado', 'Inflação', 'Pré-fixado', 'Renda Variável', 'Alternativo', 'Retorno Absoluto (MM)', 'Internacional', 'Caixa', 'Derivativos', 'Sem classificação'];
-const SUB_PADRAO = { 'Renda Fixa': 'PRIVADO', Fundos: 'FN', 'Previdência': 'PP', 'Renda Variável': 'ACAO', Internacional: 'ETF', COE: 'COE', Criptoativos: 'CRY', 'Conta Corrente': 'CC', 'Valor em Trânsito': 'FN', Derivativos: 'Derivativos', Outros: 'Outros' };
+const MERCADOS_OPC = ['Renda Fixa', 'Fundos', 'Previdência', 'Renda Variável', 'Internacional', 'COE', 'Criptoativos', ['Conta Corrente', 'Saldo em conta'], 'Valores a receber', 'Derivativos', 'Outros'];
+const ESTRATEGIAS_OPC = ['Pós-fixado', 'Inflação', 'Pré-fixado', 'Renda Variável', 'Alternativo', 'Retorno Absoluto (MM)', 'Internacional', 'Caixa', 'Valores a receber', 'Derivativos', 'Sem classificação'];
+const SUB_PADRAO = { 'Valores a receber': 'VR', 'Renda Fixa': 'PRIVADO', Fundos: 'FN', 'Previdência': 'PP', 'Renda Variável': 'ACAO', Internacional: 'ETF', COE: 'COE', Criptoativos: 'CRY', 'Conta Corrente': 'CC', 'Valor em Trânsito': 'FN', Derivativos: 'Derivativos', Outros: 'Outros' };
 
 function perguntarDono(ext) {
   return new Promise(resolve => {
@@ -4122,7 +4176,9 @@ function perguntarDono(ext) {
     // Rótulo exibido na conferência (o que for editado aqui vira o nome do ativo)
     const rotuloLinha = r => r.produto && r.ativo && r.produto !== r.ativo && !r.emissor ? `${r.ativo} — ${r.produto}` : (r.ativo && r.emissor ? r.ativo : r.produto || r.ativo || '');
     const regs = ext.regs.map(r => ({ ...r }));
-    const opc = (lista, v) => lista.map(o => `<option ${o === v ? 'selected' : ''}>${esc(o)}</option>`).join('') + (v && !lista.includes(v) ? `<option selected>${esc(v)}</option>` : '');
+    // opção pode ser "texto" ou [valor, rótulo] (ex.: Conta Corrente aparece como "Saldo em conta")
+    const opc = (lista, v) => { const vals = lista.map(o => Array.isArray(o) ? o[0] : o);
+      return lista.map(o => { const [val, rot] = Array.isArray(o) ? o : [o, o]; return `<option value="${esc(val)}" ${val === v ? 'selected' : ''}>${esc(rot)}</option>`; }).join('') + (v && !vals.includes(v) ? `<option selected>${esc(v)}</option>` : ''); };
     const linha = (r, i) => `<tr data-i="${i}">
       <td><input type="text" class="r-nome" value="${esc(rotuloLinha(r))}" data-orig="${esc(rotuloLinha(r))}"></td>
       <td><select class="r-merc">${opc(MERCADOS_OPC, r.mercado)}</select></td>
@@ -4274,10 +4330,46 @@ Usar o extrato mesmo assim? Ele substitui as linhas dessa conta vindas da planil
   incluirExtrato(r.ext, dono);
   return dono;
 }
+// Chave de uma posição para reconhecer a mesma aplicação em dois extratos (ex.: informativo e saldo em carteira da Caixa)
+function chavePosicao(r) {
+  const venc = data(r.vencimento);
+  return [norm(r.produto || r.ativo || ''), venc ? venc.toISOString().slice(0, 10) : '', norm(r.taxaTexto || '').replace(/\s+/g, '')].join('|');
+}
+// Antes de incluir: se o cliente já tem um extrato da mesma instituição com as mesmas aplicações, não soma de novo.
+// Dois formatos diferentes da mesma data (até 10 dias) se completam (vale o valor mais recente de cada aplicação);
+// senão, o novo substitui o antigo.
+function combinarComExistente(ext, dono, id) {
+  const chaves = new Set(dono.regs.map(chavePosicao));
+  const cand = [...S.fontes.values()].filter(f => f.id !== 'BTG' && f.id !== 'EXEMPLO' && f.inst === dono.inst &&
+    (f.id === id || f.registros.some(r => norm(r.nome) === norm(dono.cliente))));
+  for (const f of cand) {
+    const iguais = f.registros.filter(r => chaves.has(chavePosicao(r))).length;
+    if (f.id !== id && iguais < Math.max(1, Math.min(f.registros.length, chaves.size) / 2)) continue;  // aplicações diferentes: outro extrato
+    const dNovo = data(ext.data), dVelho = data(f.dataRef);
+    const perto = dNovo && dVelho && Math.abs(dNovo - dVelho) <= 10 * 864e5;
+    if (iguais && perto && (ext.modelo || '') !== (f.modelo || '')) {
+      const novoMaisRecente = dNovo >= dVelho;
+      const mapa = new Map(f.registros.map(r => [chavePosicao(r), r]));
+      for (const r of dono.regs) { const k = chavePosicao(r); if (!mapa.has(k) || novoMaisRecente) mapa.set(k, r); }
+      return { id: f.id, regs: [...mapa.values()], combinado: f, dataRef: novoMaisRecente ? ext.data : f.dataRef };
+    }
+    return { id: f.id, regs: dono.regs, substitui: f };
+  }
+  return { id, regs: dono.regs };
+}
 function incluirExtrato(ext, dono) {
   const nomeArq = ext.arquivo;
+  const comb = combinarComExistente(ext, dono, `${dono.inst}|${dono.conta || nomeArq}`);
+  if (comb.combinado) {
+    const f0 = comb.combinado;
+    registrar('Extratos combinados', `${dono.inst} · ${f0.arquivo} + ${nomeArq} (mesmas aplicações em formatos diferentes: cada uma contada uma vez)`);
+    adicionarFonte({ ...f0, combinado: true, arquivo: `${f0.arquivo} + ${nomeArq}`, modelo: `${f0.modelo || ''}+${ext.modelo || ''}`, dataRef: comb.dataRef,
+      registros: comb.regs.map(r => ({ ...r, conta: f0.registros[0]?.conta || r.conta, nome: dono.cliente, data: r.data || ext.data })) });
+    return;
+  }
+  if (comb.substitui && comb.id !== `${dono.inst}|${dono.conta || nomeArq}`) S.fontes.delete(comb.id);
   adicionarFonte({
-    id: `${dono.inst}|${dono.conta || nomeArq}`, inst: dono.inst, contaBTG: ext.contaBTG || null, dataRef: ext.data || null,
+    id: `${dono.inst}|${dono.conta || nomeArq}`, inst: dono.inst, contaBTG: ext.contaBTG || null, dataRef: ext.data || null, modelo: ext.modelo || `${dono.inst}-${ext.tipo || ''}`,
     rotulo: `${nomeProprio(dono.cliente).split(' ')[0]} ${dono.conta}`.trim(), arquivo: nomeArq,
     registros: dono.regs.map(r => ({ ...r, conta: dono.contaFull || `${dono.inst} ${nomeArq}`, nome: dono.cliente, data: ext.data })),
   });
