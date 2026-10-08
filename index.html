@@ -2977,7 +2977,7 @@ function estrategiaFundo(w, dica = '') {
   if (/ (fim|mult|multimercado|macro) /.test(w)) return 'Retorno Absoluto (MM)';
   // Fundo de NTN-B / IPCA (ex.: "BTG Pactual NTNB 2035 Yield Prev"): inflação
   if (/ (ntnb|ntn b|ipca|inflacao|imab|ima b) /.test(w)) return 'Inflação';
-  if (/ (rf|firf|di|referen|referenciado|renda fixa|simples|cp|credito) /.test(w)) return 'Pós-fixado';
+  if (/ (rf|firf|firfrefdi|refdi|di|selic|referen|referenciado|renda fixa|simples|cp|credito) /.test(w)) return 'Pós-fixado';
   return 'Sem classificação';
 }
 // Classifica um ativo de outra instituição na mesma lógica do BTG (Classe = Mercado, Subclasse, Estratégia)
@@ -2989,8 +2989,10 @@ function classificar(nome, { categoria = '', indexador = '', dica = '' } = {}) {
   if (/ (swap|termo|ndf|opcao|opcoes|derivativo|derivativos) /.test(w) || / (derivativos|opcoes) /.test(c)) return { classe: 'Derivativos', sub: 'Derivativos', estr: 'Derivativos' };
   if (/ (previdencia|pgbl|vgbl) /.test(w) || / previdencia /.test(c)) return { classe: 'Previdência', sub: 'PP', estr: estrategiaFundo(w, dica) };
   if (/ (fidc|fip) /.test(w)) return { classe: 'Fundos', sub: 'FN', estr: 'Alternativo' };
-  if (/ (ntn|ntnb|ltn|lft|ntnf|tesouro) /.test(w)) {
-    const tipo = / ltn /.test(w) ? 'LTN' : / lft /.test(w) ? 'LFT' : / (ntn f|ntnf) /.test(w) ? 'NTN-F' : 'NTN-B';
+  // Fundo com "Tesouro" no nome (ex.: "BTG Tesouro Selic FIRFRefDI") é fundo, não título público
+  const fundoNome = / (fi|fic|fia|fim|firf|firfrefdi|refdi|fundo|fundos|referenciado) /.test(w);
+  if (/ (ntn|ntnb|ltn|lft|ntnf) /.test(w) || (/ tesouro /.test(w) && !fundoNome)) {
+    const tipo = / ltn /.test(w) ? 'LTN' : / (lft|selic) /.test(w) ? 'LFT' : / (ntn f|ntnf) /.test(w) ? 'NTN-F' : 'NTN-B';
     return { classe: 'Renda Fixa', sub: 'TITULO PUBLICO', estr: estrIx || { LTN: 'Pré-fixado', 'NTN-F': 'Pré-fixado', LFT: 'Pós-fixado' }[tipo] || 'Inflação', tipo };
   }
   const priv = w.match(/ (cri|cra|crapre|debent|debenture|debentures) /);
@@ -3463,6 +3465,9 @@ function reconciliar(ext) {
    Quem mudar o código acrescenta uma entrada no topo (data, autor e o que mudou, em linguagem simples).
    Ao abrir uma versão nova, o B.I. registra a atualização no histórico. */
 const VERSOES_BI = [
+  { versao: '2026.10.08', data: '2026-10-08', autor: 'Vinicius + Claude', mudancas: [
+    'Fundo "BTG Tesouro Selic" vindo do extrato do BTG agora é Pós-fixado (antes era confundido com título público de inflação).',
+  ] },
   { versao: '2026.10.07c', data: '2026-10-07', autor: 'Vinicius + Claude', mudancas: [
     'Extrato do BTG em PDF agora lê também COE, previdência, ETF e valores em trânsito, e sai igual ao Excel do mesmo extrato.',
     'Extratos da mesma instituição com as mesmas aplicações (ex.: informativo e saldo em carteira da Caixa) se combinam: nunca são somados duas vezes.',
