@@ -4230,7 +4230,7 @@ function perguntarDono(ext) {
         ${clientes.length ? `<label class="opcao"><input type="radio" name="modo" value="existente" ${sugerido ? 'checked' : ''}> Cliente que já está no painel
           <select name="cliente">${clientes.map(c => `<option value="${esc(c.id)}" ${sugerido && sugerido.id === c.id ? 'selected' : ''}>${esc(c.nome)}${c.familiaNome && c.familiaNome !== c.nome ? ` · ${esc(c.familiaNome)}` : ''}${nomeRepetido(c.nome, clientes) || soPrimeiroNome(c.nome) ? ` · ${esc(rotuloContas(c.contas))}` : ''}</option>`).join('')}</select></label>
         <label class="opcao sub" id="dono-completo" hidden><span>Nome completo deste cliente</span>
-          <input type="text" name="nomeCompleto" placeholder="ex.: Fernando Eduardo Prison"><small class="muted">A planilha do BTG só traz o primeiro nome: com o nome completo o B.I. não junta pessoas diferentes.</small></label>` : ''}
+          <input type="text" name="nomeCompleto" placeholder="ex.: José Carlos da Silva"><small class="muted">A planilha do BTG só traz o primeiro nome: com o nome completo o B.I. não junta pessoas diferentes.</small></label>` : ''}
         <label class="opcao"><input type="radio" name="modo" value="novo" ${sugerido ? '' : 'checked'}> Novo cliente
           <input type="text" name="nome" placeholder="Nome completo" value="${esc(cad?.cliente || ext.clienteSugerido || '')}"></label>
         <label class="opcao sub"><span>Grupo familiar</span>
