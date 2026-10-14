@@ -891,6 +891,7 @@ function montarPosicao(r) {
     bruto, liquido: numero(r.liquido) ?? bruto, ir: numero(r.ir) || 0, iof: numero(r.iof) || 0,
     data: data(r.data), tipoPlano: texto(r.tipoPlano), grupo: texto(r.grupo), instituicao: texto(r.instituicao) || 'BTG',
     usd: numero(r.usd), cambio: numero(r.cambio), cambioData: texto(r.cambioData), taxaTexto: texto(r.taxaTexto),
+    titular: texto(r.titular),  // titular como veio no extrato (ex.: a PJ do cliente)
   };
   p.estrategia = texto(r.estrategia) || ESTRATEGIA_PADRAO[norm(mercado)] || 'Sem classificação';
   p.caixa = norm(mercado) === 'conta corrente';
@@ -1023,7 +1024,8 @@ const nomeProprio = s => String(s ?? '').toLowerCase().replace(/\s+/g, ' ').trim
 function montarClientes(posicoes, exemplo) {
   const cad = new Map();
   if (!exemplo && Array.isArray(window.CADASTRO_CLIENTES)) for (const c of window.CADASTRO_CLIENTES) cad.set(chaveConta(c.conta), c);
-  if (!exemplo) for (const c of S.cadExtra.values()) cad.set(chaveConta(c.conta), c);
+  // Alteração feita no navegador vale por cima do grupos.js, mas mantém a descrição da conta (ex.: "PJ — Holding")
+  if (!exemplo) for (const c of S.cadExtra.values()) { const k = chaveConta(c.conta); cad.set(k, { ...cad.get(k), ...c }); }
   const planilhaTemGrupo = posicoes.some(p => p.grupo);
   // Apelidos por nome (ex.: a holding PJ de um cliente pertence à pessoa física dele)
   const apelidos = exemplo ? [] : (window.APELIDOS_CLIENTES || []);
@@ -2032,17 +2034,22 @@ function renderDiag(s, P) {
     if (!multiInst && contas.length > 1) {
       // Uma instituição com 2+ contas: posição por conta (instituição, conta, titular/descrição, data-base)
       const porConta = agruparDG(L, x => x.p.conta);
-      const descConta = g => {
-        const ps = g.itens.map(x => x.p), dt = ps.map(p => p.data).filter(Boolean);
-        const quem = [S.descConta?.get(g.k), porFamilia ? ps[0].clienteNome : ''].filter(Boolean).join(' • ');
-        return [quem, dt.length ? `data-base ${dataBR(new Date(Math.max(...dt)))}` : ''].filter(Boolean).join(' • ');
+      // Titular de cada conta: descrição do cadastro (ex.: "PJ — FMF Participações"); PF = nome do cliente;
+      // sem descrição, o nome do titular que veio no extrato (a planilha do BTG só traz o primeiro nome)
+      const titularConta = g => {
+        const p = g.itens[0].p, d = S.descConta?.get(g.k);
+        if (d) return /^pessoa f/i.test(d) ? `${p.clienteNome} — PF` : d.replace(/^PJ\s*[—-]\s*/i, '') + ' — PJ';
+        const t = p.titular || p.nome;
+        return t && !soPrimeiroNome(t) && norm(t) !== norm(p.clienteNome) ? nomeProprio(t) : p.clienteNome;
       };
+      const dataConta = g => { const dt = g.itens.map(x => x.p.data).filter(Boolean); return dt.length ? dataBR(new Date(Math.max(...dt))) : '—'; };
       corpo += bl('custodia', 'Posição por conta', true, `<div class="box-k bloco-dg">Posição por conta e instituição</div>` + tabelaDG([
-        { rot: 'Instituição', w: '18%', l: 1, f: g => `<span class="nm">${esc(NOME_INST[g.itens[0].p.instituicao] || g.itens[0].p.instituicao)}</span>` },
-        { rot: 'Conta', w: '16%', l: 1, f: g => esc(String(g.k).replace(new RegExp('^' + g.itens[0].p.instituicao + '\\s+'), '')) },
-        { rot: 'Titular e data-base', w: '34%', l: 1, cls: 'ativos', f: g => esc(descConta(g)) },
-        { rot: 'Valor (R$)', w: '16%', f: g => rsDG(g.v) }, { rot: '% cart.', w: '9%', f: g => pcT(g.v) }, { rot: 'Nº', w: '7%', f: g => g.itens.length },
-      ], porConta, ['TOTAL CONSOLIDADO', `${porConta.length} contas`, '', rsDG(total), '100,00%', L.length]));
+        { rot: 'Instituição', w: '13%', l: 1, f: g => esc(NOME_INST[g.itens[0].p.instituicao] || g.itens[0].p.instituicao) },
+        { rot: 'Conta', w: '12%', l: 1, f: g => esc(String(g.k).replace(new RegExp('^' + g.itens[0].p.instituicao + '\\s+'), '')) },
+        { rot: 'Titular', w: '33%', l: 1, f: g => `<span class="nm">${esc(titularConta(g))}</span>` },
+        { rot: 'Data-base', w: '11%', l: 1, f: g => dataConta(g) },
+        { rot: 'Valor (R$)', w: '15%', f: g => rsDG(g.v) }, { rot: '% cart.', w: '9%', f: g => pcT(g.v) }, { rot: 'Nº', w: '7%', f: g => g.itens.length },
+      ], porConta, ['TOTAL CONSOLIDADO', `${porConta.length} contas`, '', '', rsDG(total), '100,00%', L.length]));
     } else if (titulares.length > 2) {
       corpo += `<div class="box-k bloco-dg">Distribuição por ${porFamilia ? 'cliente' : 'conta'}</div>` + tabelaDG([
         { rot: porFamilia ? 'Cliente' : 'Conta', w: '34%', l: 1, f: t => `<span class="nm">${esc(rotTit(t.k))}</span>` },
@@ -3482,6 +3489,9 @@ function reconciliar(ext) {
    Quem mudar o código acrescenta uma entrada no topo (data, autor e o que mudou, em linguagem simples).
    Ao abrir uma versão nova, o B.I. registra a atualização no histórico. */
 const VERSOES_BI = [
+  { versao: '2026.10.14e', data: '2026-10-14', autor: 'Vinicius + Claude', mudancas: [
+    '"Posição por conta e instituição": coluna Titular com o nome de cada conta (ex.: o cliente — PF e a holding — PJ), pela descrição do cadastro ou pelo titular que veio no extrato.',
+  ] },
   { versao: '2026.10.14d', data: '2026-10-14', autor: 'Vinicius + Claude', mudancas: [
     'Diagnóstico e relatório: cliente com duas ou mais contas na mesma instituição ganha o quadro "Posição por conta e instituição" na página 1 (conta, titular, data-base, valor e %), removível na montagem do relatório.',
   ] },
@@ -4442,7 +4452,7 @@ function incluirExtrato(ext, dono) {
   adicionarFonte({
     id: `${dono.inst}|${dono.conta || nomeArq}`, inst: dono.inst, contaBTG: ext.contaBTG || null, dataRef: ext.data || null, modelo: ext.modelo || `${dono.inst}-${ext.tipo || ''}`,
     rotulo: `${nomeProprio(dono.cliente).split(' ')[0]} ${dono.conta}`.trim(), arquivo: nomeArq,
-    registros: dono.regs.map(r => ({ ...r, conta: dono.contaFull || `${dono.inst} ${nomeArq}`, nome: dono.cliente, data: ext.data })),
+    registros: dono.regs.map(r => ({ ...r, conta: dono.contaFull || `${dono.inst} ${nomeArq}`, nome: dono.cliente, titular: ext.clienteSugerido || null, data: ext.data })),
   });
 }
 async function processarArquivos(arquivos, opc = {}) {
