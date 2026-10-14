@@ -3489,6 +3489,9 @@ function reconciliar(ext) {
    Quem mudar o código acrescenta uma entrada no topo (data, autor e o que mudou, em linguagem simples).
    Ao abrir uma versão nova, o B.I. registra a atualização no histórico. */
 const VERSOES_BI = [
+  { versao: '2026.10.14g', data: '2026-10-14', autor: 'Vinicius + Claude', mudancas: [
+    'Extratos de contas diferentes no mesmo banco (ex.: PF e PJ, cada uma só com saldo em conta) não se substituem mais: as duas ficam.',
+  ] },
   { versao: '2026.10.14f', data: '2026-10-14', autor: 'Vinicius + Claude', mudancas: [
     'Editar cadastro: coluna "Titular da conta" (ex.: "Pessoa Física" ou "PJ — Holding"), que aparece no quadro de posição por conta do relatório.',
   ] },
@@ -4428,7 +4431,11 @@ function combinarComExistente(ext, dono, id) {
   const chaves = new Set(dono.regs.map(chavePosicao));
   const cand = [...S.fontes.values()].filter(f => f.id !== 'BTG' && f.id !== 'EXEMPLO' && f.inst === dono.inst &&
     (f.id === id || f.registros.some(r => norm(r.nome) === norm(dono.cliente))));
+  // Conta do extrato já carregado ('' quando veio sem conta: o id usa o nome do arquivo)
+  const contaDe = f => { const c = f.id.slice(String(f.inst).length + 1); return c && c !== f.arquivo && !/\.(pdf|xlsx?|xlsm|jpe?g|png|webp|bmp)$/i.test(c) ? c : ''; };
   for (const f of cand) {
+    // Contas diferentes (ex.: PF e PJ no mesmo banco, cada uma só com saldo em conta) são sempre extratos diferentes
+    if (f.id !== id && dono.conta && contaDe(f) && chaveConta(contaDe(f)) !== chaveConta(dono.conta)) continue;
     const iguais = f.registros.filter(r => chaves.has(chavePosicao(r))).length;
     if (f.id !== id && iguais < Math.max(1, Math.min(f.registros.length, chaves.size) / 2)) continue;  // aplicações diferentes: outro extrato
     const dNovo = data(ext.data), dVelho = data(f.dataRef);
