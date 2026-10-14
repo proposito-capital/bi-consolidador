@@ -2029,7 +2029,21 @@ function renderDiag(s, P) {
                : kpiDG('Exposição internacional', pcT(intl), intl ? `${rsDG(intl)}${usdTot ? ` • US$ ${num(usdTot)} no exterior` : ''}` : 'Carteira 100% Brasil, 100% em reais');
     let corpo = `<div class="kpis-dg">${k}</div>`;
     if (!multiInst) corpo += bl('composicao', 'Composição por classe', true, `<div class="box-k">Composição por classe estratégica</div>${barrasClasse(classes, cor, total, true)}`);
-    if (titulares.length > 2) {
+    if (!multiInst && contas.length > 1) {
+      // Uma instituição com 2+ contas: posição por conta (instituição, conta, titular/descrição, data-base)
+      const porConta = agruparDG(L, x => x.p.conta);
+      const descConta = g => {
+        const ps = g.itens.map(x => x.p), dt = ps.map(p => p.data).filter(Boolean);
+        const quem = [S.descConta?.get(g.k), porFamilia ? ps[0].clienteNome : ''].filter(Boolean).join(' • ');
+        return [quem, dt.length ? `data-base ${dataBR(new Date(Math.max(...dt)))}` : ''].filter(Boolean).join(' • ');
+      };
+      corpo += bl('custodia', 'Posição por conta', true, `<div class="box-k bloco-dg">Posição por conta e instituição</div>` + tabelaDG([
+        { rot: 'Instituição', w: '18%', l: 1, f: g => `<span class="nm">${esc(NOME_INST[g.itens[0].p.instituicao] || g.itens[0].p.instituicao)}</span>` },
+        { rot: 'Conta', w: '16%', l: 1, f: g => esc(String(g.k).replace(new RegExp('^' + g.itens[0].p.instituicao + '\\s+'), '')) },
+        { rot: 'Titular e data-base', w: '34%', l: 1, cls: 'ativos', f: g => esc(descConta(g)) },
+        { rot: 'Valor (R$)', w: '16%', f: g => rsDG(g.v) }, { rot: '% cart.', w: '9%', f: g => pcT(g.v) }, { rot: 'Nº', w: '7%', f: g => g.itens.length },
+      ], porConta, ['TOTAL CONSOLIDADO', `${porConta.length} contas`, '', rsDG(total), '100,00%', L.length]));
+    } else if (titulares.length > 2) {
       corpo += `<div class="box-k bloco-dg">Distribuição por ${porFamilia ? 'cliente' : 'conta'}</div>` + tabelaDG([
         { rot: porFamilia ? 'Cliente' : 'Conta', w: '34%', l: 1, f: t => `<span class="nm">${esc(rotTit(t.k))}</span>` },
         { rot: 'Contas', w: '30%', l: 1, cls: 'ativos', f: t => esc([...new Set(t.itens.map(x => x.p.conta))].join(' • ')) },
@@ -3468,6 +3482,9 @@ function reconciliar(ext) {
    Quem mudar o código acrescenta uma entrada no topo (data, autor e o que mudou, em linguagem simples).
    Ao abrir uma versão nova, o B.I. registra a atualização no histórico. */
 const VERSOES_BI = [
+  { versao: '2026.10.14d', data: '2026-10-14', autor: 'Vinicius + Claude', mudancas: [
+    'Diagnóstico e relatório: cliente com duas ou mais contas na mesma instituição ganha o quadro "Posição por conta e instituição" na página 1 (conta, titular, data-base, valor e %), removível na montagem do relatório.',
+  ] },
   { versao: '2026.10.14c', data: '2026-10-14', autor: 'Vinicius + Claude', mudancas: [
     'Quando o navegador não tem o cadastro de clientes, aparece um aviso no topo com o botão "Carregar grupos.js": os nomes completos entram na hora.',
   ] },
