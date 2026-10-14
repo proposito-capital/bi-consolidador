@@ -3465,6 +3465,10 @@ function reconciliar(ext) {
    Quem mudar o código acrescenta uma entrada no topo (data, autor e o que mudou, em linguagem simples).
    Ao abrir uma versão nova, o B.I. registra a atualização no histórico. */
 const VERSOES_BI = [
+  { versao: '2026.10.14', data: '2026-10-14', autor: 'Vinicius + Claude', mudancas: [
+    'Extratos: "Substituir" (e "+ Anexar extrato" e "Atualizar com a pasta") abertos dessa janela não faziam nada; agora o arquivo novo entra e substitui o anterior.',
+    'Extratos: a planilha diária do BTG ganhou o botão "Remover".',
+  ] },
   { versao: '2026.10.08', data: '2026-10-08', autor: 'Vinicius + Claude', mudancas: [
     'Fundo "BTG Tesouro Selic" vindo do extrato do BTG agora é Pós-fixado (antes era confundido com título público de inflação).',
   ] },
@@ -3855,7 +3859,7 @@ function abrirExtratos() {
   // Planilha diária do BTG: primeira linha da tabela, em destaque
   const linhaBtg = btg ? `<tr class="ext-cli"><td colspan="7">Planilha diária do BTG<small>base de todos os clientes · ${esc(btg.rotulo || '')} · ${esc(brl(btg.total))}</small></td></tr>
     <tr class="ext-btg"><td><b>BTG</b></td><td>${esc(btg.rotulo || '')}</td><td class="sec">${esc(btg.arquivo || '–')}</td><td>${esc(btg.dataRef || '–')}</td><td>${esc(quando(btg))}</td><td class="n">${esc(brl(btg.total))}</td>
-    <td class="n" style="white-space:nowrap"><button type="button" class="btn-link" id="ext-atualizar">Atualizar com a pasta</button> · <button type="button" class="btn-link" data-subst="BTG">Substituir</button></td></tr>` : '';
+    <td class="n" style="white-space:nowrap"><button type="button" class="btn-link" id="ext-atualizar">Atualizar com a pasta</button> · <button type="button" class="btn-link" data-subst="BTG">Substituir</button> · <button type="button" class="btn-link" data-rm="BTG">Remover</button></td></tr>` : '';
   dlg.innerHTML = `<form method="dialog" class="dlg dlg-largo">
     <h2>Extratos carregados</h2>
     <p class="sec"><b>Posição de</b> = data das posições dentro do arquivo (a planilha do BTG é sempre do dia anterior). <b>Carregado em</b> = quando o arquivo entrou no B.I.</p>
@@ -3876,13 +3880,16 @@ function abrirExtratos() {
     });
     dlg.querySelectorAll('.ext-lista tr.ext-cli').forEach(tr => { let n = tr.nextElementSibling, algum = false; while (n && !n.classList.contains('ext-cli')) { if (!n.hidden) algum = true; n = n.nextElementSibling; } tr.hidden = !algum; });
   });
+  const fechar = async () => dlg.close();
   dlg.querySelector('tbody')?.addEventListener('click', async e => {
     const s = e.target.closest('[data-subst]'), r = e.target.closest('[data-rm]');
-    if (s) { dlg.close(); await anexarExtrato({ inst: s.dataset.subst }); return; }
-    if (r && confirm('Remover este extrato do painel? (O arquivo na pasta não é apagado.)')) { dlg.close(); removerFonte(r.dataset.rm); }
+    if (s) { await fechar(); await anexarExtrato({ inst: s.dataset.subst }); return; }
+    const msg = r?.dataset.rm === 'BTG' ? 'Remover a planilha diária do BTG do painel? (O arquivo na pasta não é apagado.)' : 'Remover este extrato do painel? (O arquivo na pasta não é apagado.)';
+    if (r && confirm(msg)) { await fechar(); removerFonte(r.dataset.rm); }
   });
-  $('#ext-anexar').onclick = async () => { dlg.close(); await anexarExtrato(); };
-  $('#ext-atualizar').onclick = async () => { dlg.close(); await atualizarComPasta(); };
+  $('#ext-anexar').onclick = async () => { await fechar(); await anexarExtrato(); };
+  $('#ext-atualizar').onclick = async () => { await fechar(); await atualizarComPasta(); };
+  dlg.onclose = null;
   dlg.showModal();
 }
 
@@ -4758,6 +4765,9 @@ $('#abas').addEventListener('click', e => { const b = e.target.closest('button')
 
 // Janelas (dialog): o botão com "value" fecha a janela direto, sem depender do envio do formulário,
 // que a pré-visualização do SharePoint e alguns navegadores bloqueiam. Campos obrigatórios continuam sendo conferidos.
+// Uma janela que fecha e logo abre outra no mesmo dialog (ex.: Extratos → Substituir): o aviso "close" da primeira
+// chega atrasado, com a segunda já aberta, e a cancelava. Aviso de fechamento com a janela aberta é ignorado.
+document.addEventListener('close', e => { if (e.target.open) e.stopImmediatePropagation(); }, true);
 document.addEventListener('click', e => {
   const b = e.target.closest('dialog form[method="dialog"] button[value]');
   if (!b) return;
