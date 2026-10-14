@@ -554,6 +554,8 @@ table.conf td:nth-child(4) input { text-align: right; }
   <div id="aviso-carga" class="faixa-exemplo" hidden></div>
   <div id="aviso-antigo" class="faixa-exemplo" hidden></div>
   <div id="aviso-pasta" class="faixa-exemplo" hidden></div>
+  <div id="aviso-cad" class="faixa-exemplo" hidden></div>
+  <input type="file" id="arq-cadastro" accept=".js" hidden>
 
   <!-- Estado inicial -->
   <section id="vazio" class="vazio">
@@ -3466,6 +3468,9 @@ function reconciliar(ext) {
    Quem mudar o código acrescenta uma entrada no topo (data, autor e o que mudou, em linguagem simples).
    Ao abrir uma versão nova, o B.I. registra a atualização no histórico. */
 const VERSOES_BI = [
+  { versao: '2026.10.14c', data: '2026-10-14', autor: 'Vinicius + Claude', mudancas: [
+    'Quando o navegador não tem o cadastro de clientes, aparece um aviso no topo com o botão "Carregar grupos.js": os nomes completos entram na hora.',
+  ] },
   { versao: '2026.10.14b', data: '2026-10-14', autor: 'Vinicius + Claude', mudancas: [
     'Clientes com o mesmo primeiro nome (a planilha do BTG só traz o primeiro nome) não se misturam mais: nas listas aparece a conta ao lado do nome.',
     'Ao anexar um extrato para um cliente que só tem o primeiro nome, o B.I. pede o nome completo.',
@@ -3586,6 +3591,22 @@ async function atualizarComPasta() {
   } catch (e) { box.textContent = `Não consegui ler a pasta (${e.message || e}). Use "Ler pasta" no topo.`; box.hidden = false; }
 }
 // Os dados voltam do navegador, mas a planilha do BTG não se atualiza sozinha: avisa quando ela não foi carregada hoje
+// Sem cadastro (grupos.js) neste navegador, a planilha do BTG só traz o primeiro nome: avisa e oferece carregar o arquivo
+function avisarCadastro() {
+  const box = $('#aviso-cad');
+  const semCad = !S.exemplo && S.posicoes.length && !(window.CADASTRO_CLIENTES || []).length;
+  box.hidden = !semCad;
+  if (!semCad) return;
+  box.innerHTML = `<b>Nomes completos não carregados:</b> a planilha do BTG só traz o primeiro nome. Carregue o cadastro de clientes (arquivo <b>grupos.js</b>, na pasta B.I do OneDrive) para o B.I. saber quem é quem.
+    <button type="button" class="btn-link" id="btn-cad-arq">Carregar grupos.js</button>`;
+  $('#btn-cad-arq').onclick = () => $('#arq-cadastro').click();
+}
+$('#arq-cadastro').addEventListener('change', async e => {
+  const a = e.target.files[0]; e.target.value = '';
+  if (!a) return;
+  try { const c = await lerCadastroDaPasta(a); registrar('Cadastro carregado', `${a.name} · ${c.clientes.length} contas`); recalcular(); }
+  catch (err) { alert(`Não consegui ler o cadastro (${err.message || err}). Confira se é o grupos.js da pasta B.I.`); }
+});
 function avisarPlanilhaAntiga() {
   const f = S.fontes.get('BTG'), box = $('#aviso-antigo');
   const hoje = new Date().toDateString();
@@ -3833,6 +3854,7 @@ function recalcular() {
   $('#abas').hidden = false;
   $('#faixa-exemplo').hidden = !exemplo;
   renderFontes();
+  avisarCadastro();
   irPara(primeira ? 'carteira' : S.aba, primeira);
 }
 // Barra do topo: de quando são os dados (planilha do BTG) e o botão "Extratos", que abre a lista por cliente
