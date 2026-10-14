@@ -2034,7 +2034,7 @@ function renderDiag(s, P) {
     if (!multiInst && contas.length > 1) {
       // Uma instituição com 2+ contas: posição por conta (instituição, conta, titular/descrição, data-base)
       const porConta = agruparDG(L, x => x.p.conta);
-      // Titular de cada conta: descrição do cadastro (ex.: "PJ — FMF Participações"); PF = nome do cliente;
+      // Titular de cada conta: descrição do cadastro (ex.: "PJ — Holding Patrimonial"); PF = nome do cliente;
       // sem descrição, o nome do titular que veio no extrato (a planilha do BTG só traz o primeiro nome)
       const titularConta = g => {
         const p = g.itens[0].p, d = S.descConta?.get(g.k);
